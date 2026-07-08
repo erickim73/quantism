@@ -1,6 +1,8 @@
 from datetime import datetime
 
-from quantsim.exchange.tick_generator import SyntheticTickGenerator
+import pytest
+
+from quantsim.exchange.tick_generator import SyntheticTickDataHandler, SyntheticTickGenerator
 
 T0 = datetime(2024, 1, 1, 9, 30)
 
@@ -58,3 +60,62 @@ def test_generate_ohlcv_high_is_never_below_low():
     frame = generator.generate_ohlcv(n_ticks=25, start=T0, mean_interval_seconds=1.0)
 
     assert (frame["high"] >= frame["low"]).all()
+
+
+def test_data_handler_update_bars_pushes_one_event_and_keeps_book_live():
+    generator = SyntheticTickGenerator(seed=5)
+    handler = SyntheticTickDataHandler(symbol="AAPL", generator=generator, n_ticks=3, start=T0)
+
+    handler.update_bars()
+
+    assert len(handler.event_queue) == 1
+    # The generator's own book (not a stale pre-generated snapshot) reflects "now".
+    assert generator.order_book.best_bid() is not None
+
+
+def test_data_handler_sets_continue_backtest_false_after_last_tick():
+    generator = SyntheticTickGenerator(seed=6)
+    handler = SyntheticTickDataHandler(symbol="AAPL", generator=generator, n_ticks=2, start=T0)
+
+    handler.update_bars()
+    assert handler.continue_backtest is True
+    handler.update_bars()
+    assert handler.continue_backtest is False
+
+    handler.update_bars()  # calling again past the end should not push more events
+    assert len(handler.event_queue) == 2
+
+
+def test_data_handler_get_latest_bars_excludes_marked_current_tick():
+    generator = SyntheticTickGenerator(seed=8)
+    handler = SyntheticTickDataHandler(symbol="AAPL", generator=generator, n_ticks=3, start=T0)
+
+    handler.update_bars()
+    first_event = handler.event_queue.pop()
+    handler.mark_current(first_event)
+    assert len(handler.get_latest_bars("AAPL", n=5)) == 0
+
+    handler.update_bars()
+    second_event = handler.event_queue.pop()
+    handler.mark_current(second_event)
+    latest = handler.get_latest_bars("AAPL", n=5)
+    assert len(latest) == 1  # only the first tick is now "history"
+
+
+def test_data_handler_get_next_bar_is_not_supported():
+    generator = SyntheticTickGenerator(seed=9)
+    handler = SyntheticTickDataHandler(symbol="AAPL", generator=generator, n_ticks=1, start=T0)
+
+    with pytest.raises(NotImplementedError):
+        handler.get_next_bar("AAPL", after=T0)
+
+
+def test_next_arrival_time_is_strictly_after_current_and_deterministic_with_seed():
+    gen_a = SyntheticTickGenerator(seed=10)
+    gen_b = SyntheticTickGenerator(seed=10)
+
+    next_a = gen_a.next_arrival_time(T0, mean_interval_seconds=2.0)
+    next_b = gen_b.next_arrival_time(T0, mean_interval_seconds=2.0)
+
+    assert next_a > T0
+    assert next_a == next_b

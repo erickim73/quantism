@@ -6,6 +6,7 @@ from datetime import datetime, timedelta
 import numpy as np
 import pandas as pd
 
+from quantsim.engine.event_queue import EventQueue, MarketEvent
 from quantsim.exchange.order_book import OrderBook
 
 DEFAULT_LEVELS = 5
@@ -83,6 +84,10 @@ class SyntheticTickGenerator:
                 continue
             self.order_book.add_limit(side, price, self.level_size, timestamp)
 
+    def next_arrival_time(self, current: datetime, mean_interval_seconds: float = 1.0) -> datetime:
+        """Draw the next Poisson-process arrival time after `current`."""
+        return current + timedelta(seconds=float(self._rng.exponential(mean_interval_seconds)))
+
     def generate_ohlcv(
         self,
         n_ticks: int,
@@ -91,13 +96,21 @@ class SyntheticTickGenerator:
     ) -> pd.DataFrame:
         """Generate `n_ticks` tick-level OHLCV rows, in the same schema
         `HistoricDataHandler` expects, so it can replay tick data exactly like
-        daily bars with no changes to the engine."""
+        daily bars with no changes to the engine.
+
+        This pre-generates the *entire* stream, which advances `self.order_book`
+        all the way to its final state — fine for a fixed-cost execution model
+        (e.g. SimpleExecutionHandler) that only reads OHLCV values, but wrong
+        for live order-book execution against `self.order_book` mid-replay.
+        For that, use `SyntheticTickDataHandler`, which steps the generator
+        incrementally so the book stays in sync with "now".
+        """
         timestamps: list[datetime] = []
         rows: list[dict[str, float]] = []
         timestamp = start
 
         for _ in range(n_ticks):
-            timestamp = timestamp + timedelta(seconds=float(self._rng.exponential(mean_interval_seconds)))
+            timestamp = self.next_arrival_time(timestamp, mean_interval_seconds)
             tick = self.step(timestamp)
             timestamps.append(timestamp)
             rows.append(
@@ -111,3 +124,80 @@ class SyntheticTickGenerator:
             )
 
         return pd.DataFrame(rows, index=pd.DatetimeIndex(timestamps))
+
+
+class SyntheticTickDataHandler:
+    """Drives an EventQueue with a synthetic tick stream generated on demand —
+    one tick per `update_bars()` call — so `generator.order_book` always
+    reflects the correct state for "now" during replay.
+
+    This is the live counterpart to `SyntheticTickGenerator.generate_ohlcv`,
+    which pre-generates the whole stream up front (leaving the book stuck in
+    its *final* state). Use this handler with
+    `exchange.execution.OrderBookExecutionHandler`, which matches orders
+    immediately against the book's current state; `get_next_bar` is not
+    supported here since there is no "next bar" to look ahead to yet.
+    """
+
+    def __init__(
+        self,
+        symbol: str,
+        generator: SyntheticTickGenerator,
+        n_ticks: int,
+        start: datetime,
+        mean_interval_seconds: float = 1.0,
+    ) -> None:
+        self.symbol = symbol
+        self.symbols = [symbol]
+        self.generator = generator
+        self.n_ticks = n_ticks
+        self.mean_interval_seconds = mean_interval_seconds
+        self.event_queue: EventQueue = EventQueue()
+        self._timestamp = start
+        self._ticks_generated = 0
+        self._history: list[MarketEvent] = []
+        self._current_time: datetime | None = None
+        self.continue_backtest = True
+
+    def update_bars(self) -> None:
+        if self._ticks_generated >= self.n_ticks:
+            self.continue_backtest = False
+            return
+
+        self._timestamp = self.generator.next_arrival_time(self._timestamp, self.mean_interval_seconds)
+        tick = self.generator.step(self._timestamp)
+        event = MarketEvent(
+            timestamp=self._timestamp,
+            symbol=self.symbol,
+            open=tick.mid_price,
+            high=tick.best_ask if tick.best_ask is not None else tick.mid_price,
+            low=tick.best_bid if tick.best_bid is not None else tick.mid_price,
+            close=tick.mid_price,
+            volume=self.generator.level_size,
+        )
+        self._history.append(event)
+        self._ticks_generated += 1
+        self.event_queue.push(event)
+
+        if self._ticks_generated >= self.n_ticks:
+            self.continue_backtest = False
+
+    def mark_current(self, event: MarketEvent) -> None:
+        self._current_time = event.timestamp
+
+    def get_latest_bars(self, symbol: str, n: int = 1) -> pd.DataFrame:
+        if self._current_time is None:
+            window: list[MarketEvent] = []
+        else:
+            history_before = [e for e in self._history if e.timestamp < self._current_time]
+            window = history_before[-n:] if n > 0 else []
+        return pd.DataFrame(
+            [{"open": e.open, "high": e.high, "low": e.low, "close": e.close, "volume": e.volume} for e in window]
+        )
+
+    def get_next_bar(self, symbol: str, after: datetime) -> MarketEvent | None:
+        raise NotImplementedError(
+            "SyntheticTickDataHandler executes immediately against the live order "
+            "book (see OrderBookExecutionHandler); it does not support next-bar "
+            "lookahead fills."
+        )
