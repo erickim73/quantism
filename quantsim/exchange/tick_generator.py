@@ -186,11 +186,14 @@ class SyntheticTickDataHandler:
         self._current_time = event.timestamp
 
     def get_latest_bars(self, symbol: str, n: int = 1) -> pd.DataFrame:
+        columns = ["open", "high", "low", "close", "volume"]
         if self._current_time is None:
             window: list[MarketEvent] = []
         else:
             history_before = [e for e in self._history if e.timestamp < self._current_time]
             window = history_before[-n:] if n > 0 else []
+        if not window:
+            return pd.DataFrame(columns=columns)
         return pd.DataFrame(
             [{"open": e.open, "high": e.high, "low": e.low, "close": e.close, "volume": e.volume} for e in window]
         )

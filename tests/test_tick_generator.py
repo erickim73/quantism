@@ -93,7 +93,12 @@ def test_data_handler_get_latest_bars_excludes_marked_current_tick():
     handler.update_bars()
     first_event = handler.event_queue.pop()
     handler.mark_current(first_event)
-    assert len(handler.get_latest_bars("AAPL", n=5)) == 0
+    empty = handler.get_latest_bars("AAPL", n=5)
+    assert len(empty) == 0
+    # Regression: an empty result must still expose the OHLCV columns, so
+    # strategies that do history["close"] on a not-yet-populated window don't
+    # raise KeyError.
+    assert list(empty["close"]) == []
 
     handler.update_bars()
     second_event = handler.event_queue.pop()
