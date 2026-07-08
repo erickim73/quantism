@@ -84,7 +84,7 @@ class Backtester:
             quantity = abs(position.quantity)
         else:
             direction = "BUY" if event.direction == "LONG" else "SELL"
-            quantity = self.order_quantity
+            quantity = self.order_quantity * event.strength
 
         self.event_queue.push(
             OrderEvent(

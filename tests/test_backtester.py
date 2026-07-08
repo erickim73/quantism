@@ -72,6 +72,31 @@ def test_full_backtest_buy_then_exit_realizes_expected_pnl():
     assert data_handler.continue_backtest is False
 
 
+def test_signal_strength_scales_order_quantity():
+    dates = ["2024-01-01", "2024-01-02", "2024-01-03"]
+    opens = [100.0, 101.0, 102.0]
+    frames = {"TEST": make_frame(dates, opens)}
+
+    queue = EventQueue()
+    data_handler = HistoricDataHandler(frames, queue)
+    strategy = _ScriptedStrategy(symbols=["TEST"], signal_schedule={})
+    # Override on_data to emit a half-strength LONG signal on the first bar,
+    # instead of using the schedule dict (which always uses strength=1.0).
+    strategy.on_data = lambda event, data, _orig=strategy.on_data: (
+        [SignalEvent(timestamp=event.timestamp, symbol="TEST", direction="LONG", strength=0.5)]
+        if event.timestamp == pd.Timestamp("2024-01-01")
+        else _orig(event, data)
+    )
+    execution_handler = SimpleExecutionHandler(data_handler, commission_bps=0.0, slippage_bps=0.0)
+    portfolio = Portfolio(initial_cash=10_000.0, symbols=["TEST"])
+
+    backtester = Backtester(data_handler, strategy, execution_handler, portfolio, order_quantity=20)
+    backtester.run()
+
+    assert len(backtester.fills) == 1
+    assert backtester.fills[0].quantity == pytest.approx(10)  # 20 * 0.5
+
+
 def test_backtest_with_no_signals_produces_flat_equity_curve():
     dates = ["2024-01-01", "2024-01-02", "2024-01-03"]
     opens = [50.0, 50.0, 50.0]
