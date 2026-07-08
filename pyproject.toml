@@ -1,0 +1,30 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "quantsim"
+version = "0.1.0"
+description = "Event-driven backtesting engine, exchange/order-book simulator, market impact model, and Monte Carlo VaR risk engine."
+requires-python = ">=3.11"
+dependencies = [
+    "numpy",
+    "pandas",
+    "scipy",
+    "matplotlib",
+    "yfinance",
+    "sortedcontainers",
+    "statsmodels",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest",
+    "pytest-cov",
+]
+
+[tool.setuptools.packages.find]
+include = ["quantsim*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
