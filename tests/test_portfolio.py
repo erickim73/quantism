@@ -33,12 +33,21 @@ def test_full_close_realizes_pnl_and_flattens_position():
     portfolio = Portfolio(initial_cash=10_000, symbols=["AAPL"])
     portfolio.update_fill(make_fill("AAPL", "BUY", 10, 100.0))
 
-    portfolio.update_fill(make_fill("AAPL", "SELL", 10, 110.0))
+    delta = portfolio.update_fill(make_fill("AAPL", "SELL", 10, 110.0))
 
     position = portfolio.positions["AAPL"]
     assert position.quantity == 0
     assert position.avg_price == 0.0
     assert position.realized_pnl == pytest.approx(100.0)  # 10 * (110 - 100)
+    assert delta == pytest.approx(100.0)
+
+
+def test_opening_fill_returns_zero_realized_pnl_delta():
+    portfolio = Portfolio(initial_cash=10_000, symbols=["AAPL"])
+
+    delta = portfolio.update_fill(make_fill("AAPL", "BUY", 10, 100.0))
+
+    assert delta == 0.0
 
 
 def test_partial_close_realizes_proportional_pnl_and_keeps_remainder():
