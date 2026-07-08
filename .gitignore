@@ -17,6 +17,9 @@ data/cache/
 *.csv
 !tests/**/*.csv
 
+# demo script outputs (plots, trade logs)
+output/
+
 # notebooks
 .ipynb_checkpoints/
 
