@@ -92,12 +92,21 @@ Two single-asset strategies (`strategies/momentum.py` — MA crossover,
   "now" during replay — reusing the pre-generated book for live execution
   would silently fill every order against the *final* tick's liquidity. See
   the docstrings in `exchange/tick_generator.py` for the full reasoning.
-- **The C++/pybind11 matching-engine port was deliberately skipped.** A
-  pure-Python order book replays comfortably fast for this project's data
-  volumes; porting the hot loop to C++ would add real build complexity
-  (CMake, `scikit-build-core`, MSVC on Windows) for a speedup this project
-  never actually needs. It's a legitimate systems-engineering exercise, just
-  not one worth doing until Phase 1–5 output demanded it.
+- **The C++/pybind11 matching-engine port is optional and separately
+  installed, not a core dependency.** The pure-Python order book already
+  replays comfortably fast for this project's data volumes, so nothing in
+  `quantsim` requires the C++ extension — `cpp/` is its own installable
+  package (`pip install ./cpp`, built with `scikit-build-core` + CMake +
+  MSVC) exercising the same interface as `exchange/order_book.py`, verified
+  for behavioral parity in `tests/test_cpp_order_book.py` (same test bodies
+  run against both implementations). It exists as a systems-engineering
+  exercise in FFI design, not because the project needed the speed.
+  `scripts/demo_cpp_benchmark.py` reports an honest result rather than a
+  flattering one: calling into C++ once per order is only ~1.2x faster than
+  pure Python, because pybind11's Python↔C++ boundary crossing dominates a
+  cheap `std::map` insert — a classic FFI benchmarking mistake. Batching an
+  entire operation list into one C++ call via `run_batch` (so the hot loop
+  never leaves C++) reveals the matching engine's actual throughput: ~8.3x.
 
 ## Quant methodology references
 
@@ -138,6 +147,7 @@ plot to `output/`):
 | `scripts/demo_var.py` | Phase 4: Monte Carlo VaR/CVaR for a 2-asset portfolio + Kupiec backtest verdict |
 | `scripts/demo_pairs_trading.py` | Phase 5: cointegration check + pairs-trading backtest on a synthetic cointegrated pair |
 | `scripts/demo_optimization.py` | Phase 5: max-Sharpe / min-variance vs equal-weight / risk-parity, plotted against random portfolios |
+| `scripts/demo_cpp_benchmark.py` | Phase 5 (optional): pure-Python vs C++ order book throughput — requires `pip install ./cpp` first, otherwise prints a note and exits |
 
 `demo_ma_crossover.py` is the only script that hits the network (yfinance);
 all others use synthetic data generated in-process, so they run offline.
@@ -161,7 +171,7 @@ Verdict: PASSED (model well-calibrated)
 ## Testing
 
 ```bash
-pytest                       # ~150 tests, runs in under 2 seconds
+pytest                       # 163 tests, runs in under 2 seconds
 pytest --cov=quantsim --cov-report=term-missing
 ```
 
@@ -184,7 +194,11 @@ quantsim/
 ├── optimization/      # Markowitz mean-variance
 └── data/             # yfinance loader + CSV cache, HistoricDataHandler
 scripts/              # runnable demos (one per phase, see table above)
-tests/                # ~150 tests, one file per module
+tests/                # 163 tests, one file per module
+cpp/                  # optional C++ matching-engine extension (pip install ./cpp)
+├── src/order_book.cpp
+├── CMakeLists.txt
+└── pyproject.toml    # scikit-build-core + pybind11 build backend
 ```
 
 ## Known limitations
@@ -202,5 +216,7 @@ tests/                # ~150 tests, one file per module
 - `demo_ma_crossover.py` is the only demo that depends on fetching real data
   from yfinance; this repo's own dev environment had no network access to
   verify that specific script end-to-end — run it yourself to confirm.
-- The C++/pybind11 matching-engine port is optional/deferred (see design
-  decisions above) and not yet built.
+- The C++ matching-engine extension is not installed by default (`pip install
+  ./cpp`, requires a C++ compiler); `demo_cpp_benchmark.py` degrades
+  gracefully to a Python-only report if it's absent, and
+  `tests/test_cpp_order_book.py` is skipped rather than failed in that case.
